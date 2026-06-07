@@ -55,33 +55,44 @@ Tekan **ESC** atau tombol "Keluar" untuk menutup aplikasi.
 
 ### Web Application
 
-Run the web-based UI with API backend:
+Run the Next.js web UI with Flask API backend:
 
 1. **Start the Flask API backend:**
 ```bash
 python api.py
 ```
 
-The API will run on `http://localhost:5001` (port 5001 karena 5000 conflict dengan AirPlay di macOS)
+The API runs on `http://localhost:5001` (port 5001 avoids AirPlay conflict on macOS).
 
-2. **Open the web interface:**
-
-Open `web/index.html` in your browser, or serve it with:
+2. **Start the web frontend:**
 ```bash
 cd web
-python -m http.server 8000
+cp .env.example .env.local
+npm install
+npm run dev
 ```
 
-Then visit `http://localhost:8000/index.html`
+Open `http://localhost:3000`.
 
 **Web Features:**
-- 📸 Upload images or use webcam for classification
-- 🤖 AI classification with confidence scores
-- ♻️ Recycling recommendations
-- 🎨 Modern, responsive UI (Bahasa Indonesia)
-- 📱 Mobile-friendly
+- Upload images or use camera for classification
+- AI classification with confidence scores
+- Recycling recommendations in Bahasa Indonesia
+- Responsive UI with light/dark mode
+- Mobile-friendly (camera requires HTTPS in production)
 
-**Note:** Web app menggunakan "capture photo" mode, bukan realtime detection. Untuk realtime detection, gunakan Desktop GUI (app_gui.py).
+**Note:** Web app uses capture/upload mode, not realtime detection. For realtime detection, use the Desktop app (`python app.py`).
+
+### Deploy Web to Vercel
+
+1. Push the repo to GitHub.
+2. Import the project in [Vercel](https://vercel.com).
+3. Set **Root Directory** to `web`.
+4. Add environment variable:
+   - `NEXT_PUBLIC_API_URL` = your deployed Flask API URL (e.g. `https://plastitrace-api.onrender.com`)
+5. Deploy.
+
+The Flask API must be hosted separately (Render, Railway, or Hugging Face Spaces). GitHub Pages cannot run Python/PyTorch backends. Configure CORS on `api.py` to allow your Vercel domain.
 
 ## Features
 
@@ -140,8 +151,8 @@ Web UI Display (Label + Confidence + Recommendations)
 - **ui/camera_loop.py**: Main camera loop logic (used by app.py)
 
 #### Web App
-- **api.py**: Flask REST API endpoint untuk image classification
-- **web/index.html**: React-based web UI (single file, no build required)
+- **api.py**: Flask REST API endpoint for image classification
+- **web/**: Next.js frontend (Vercel-ready)
 
 ## API Endpoints
 
@@ -201,7 +212,9 @@ plastitrace_desktop/
 ├── utils/
 │   └── softmax.py            # Softmax utility
 └── web/
-    └── index.html            # Web UI (React + Tailwind)
+    ├── app/                  # Next.js App Router
+    ├── components/           # UI components
+    └── lib/                  # API client + recommendations
 ```
 
 ## Configuration
