@@ -27,3 +27,14 @@ Thumbs.db
 # models/*.onnx
 
 .env
+
+# AI agent / IDE configs (local only, do not commit)
+.agents/
+.claude/
+.cursor/
+.gemini/
+skills-lock.json
+docs/superpowers/
+
+# Legacy web UI
+web/index.legacy.html
