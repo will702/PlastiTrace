@@ -1,15 +1,14 @@
 # Contributing to PlastiTrace
 
-Thank you for contributing. This guide covers local setup, verification, and what to check before opening a pull request.
+Thank you for contributing. PlastiTrace is a web-only stack: Next.js frontend + Flask API + PyTorch classifier.
 
 ## Prerequisites
 
 | Tool | Version | Used for |
 |------|---------|----------|
-| Python | 3.11+ | Desktop app, API, ML pipeline |
+| Python | 3.11+ | API and ML inference |
 | Node.js | 20+ | Web frontend (`web/`) |
 | npm | 10+ | Web dependencies |
-| Webcam | Optional | Desktop realtime testing |
 
 On macOS, install Xcode Command Line Tools if NumPy or OpenCV fail to build:
 
@@ -35,71 +34,56 @@ npm install
 cd ..
 ```
 
-Place the model weights at `models/plastitrace.pth` if they are not already present.
+Place model weights at `models/plastitrace.pth` if they are not already present.
 
 ## Run locally
 
-### Desktop app
+**Terminal 1 - API:**
 
 ```bash
-source venv/bin/activate
-python app.py
-```
-
-### API + web (two terminals)
-
-```bash
-# Terminal 1
 source venv/bin/activate
 python api.py
+```
 
-# Terminal 2
+**Terminal 2 - Frontend:**
+
+```bash
 cd web && npm run dev
 ```
 
 Open `http://localhost:3000`. The frontend reads `NEXT_PUBLIC_API_URL` from `web/.env.local` (defaults to `http://localhost:5001`).
 
-### Trust layer tests
-
-```bash
-source venv/bin/activate
-python test_trust.py
-```
-
 ## Repo layout
 
-See the architecture diagrams and project tree in [README.md](README.md). Key boundaries:
+| Path | Purpose |
+|------|---------|
+| `api.py` | Flask REST API (`/api/classify`, `/api/health`) |
+| `ml/` | ResNet18 classifier, preprocessing, config |
+| `models/` | Trained weights (`plastitrace.pth`) |
+| `web/` | Next.js frontend (deploy to Vercel) |
 
-- **`app.py`** - Desktop only (PyQt5, realtime workers)
-- **`api.py`** - Web backend only (stateless image classify)
-- **`web/`** - Next.js frontend (deployed to Vercel)
-- **`workers/`** - QThread capture and inference (desktop)
-- **`ml/`**, **`vision/`**, **`realtime/`** - Shared ML and vision logic
-- **`location/`**, **`domain/`** - Drop-off map data (desktop)
-- **`trust/`**, **`feedback/`** - Quality gating and dataset tooling
+See architecture diagrams in [README.md](README.md).
 
 ## Before submitting
 
 1. **No secrets** - Do not commit `.env`, `.env.local`, API keys, or tokens.
-2. **No cache files** - `__pycache__/`, `*.pyc`, `.DS_Store` must stay out of git (see `.gitignore`).
+2. **No cache files** - `__pycache__/`, `*.pyc`, `.DS_Store` must stay out of git.
 3. **No agent tooling** - Do not commit `.cursor/`, `.agents/`, `.claude/`, `.gemini/`, or `skills-lock.json`.
-4. **Web changes** - Run `cd web && npm run build` and fix any TypeScript or build errors.
-5. **Python import check** - After UI changes, verify: `python -c "from ui.main_window import MainWindow"`.
-6. **README accuracy** - If you add or remove entry points, update README.md and this file.
+4. **Web changes** - Run `cd web && npm run build` and fix any errors.
+5. **Python check** - Verify: `python -c "from ml.classifier import PlastiTraceClassifier"`.
+6. **Docs** - Update README.md if you change API routes, env vars, or project structure.
 
 ## Deployment notes
 
 | Component | Host | Config |
 |-----------|------|--------|
 | Frontend | Vercel | Root directory: `web`, env: `NEXT_PUBLIC_API_URL` |
-| API | Render / Railway / HF Spaces | Gunicorn recommended; set `debug=False` |
-| Desktop | Local / PyInstaller | Package `app.py` with model weights |
+| API | Render / Railway / HF Spaces | Gunicorn; `debug=False`; restrict CORS |
 
 Production API checklist:
 
-- Set `debug=False` in `api.py` or use Gunicorn
 - Restrict CORS to your Vercel domain
-- Serve over HTTPS (required for mobile camera on web)
+- Serve over HTTPS (required for mobile camera)
 - Add upload size limits and file type validation
 
 ## Questions

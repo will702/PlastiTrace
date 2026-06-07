@@ -1,21 +1,10 @@
-# Core ML & Vision
+# ML
 torch
 torchvision
 opencv-python
 numpy
 Pillow
 
-# Optional (for tracking)
-opencv-contrib-python
-
-# Desktop GUI
-PyQt5
-PyQtWebEngine
-
-# Web API & Server
+# Web API
 flask==3.0.0
 flask-cors==4.0.0
-
-# Data processing
-pandas
-openpyxl
