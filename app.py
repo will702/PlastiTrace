@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import QApplication
 from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt
 from ml.classifier import PlastiTraceClassifier
-from ui.main_window_new import MainWindow
+from ui.main_window import MainWindow
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

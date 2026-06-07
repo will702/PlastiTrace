@@ -6,10 +6,13 @@ ENV/
 
 # Python
 __pycache__/
+**/__pycache__/
 *.py[cod]
+**/*.pyc
 *$py.class
 *.so
 .Python
+*.db-journal
 
 # IDE
 .vscode/
@@ -38,3 +41,6 @@ docs/superpowers/
 
 # Legacy web UI
 web/index.legacy.html
+
+# Node (belt-and-suspenders; web/.gitignore also covers these)
+web/node_modules/

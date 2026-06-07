@@ -1,86 +1,134 @@
 """
-Main window for PlastiTrace desktop application.
+Main window for PlastiTrace desktop application with 3-panel layout.
+Left: Detection results + filters
+Center: Video realtime
+Right: Map + location list
 """
 import sys
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QSlider, QCheckBox, QSpinBox,
-    QGroupBox, QFrame, QTabWidget
+    QGroupBox, QFrame, QProgressBar
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont
 from ui.video_widget import VideoWidget
-from ui.workers import CameraWorker, InferenceWorker
-from ui.map_widget import MapWidget, LocationListWidget, SAMPLE_LOCATIONS
+from workers.capture_worker import CaptureWorker
+from workers.inference_worker import InferenceWorker
+from ui.map_view import MapView
 from ml.classifier import PlastiTraceClassifier
+from location.dropoff_store import DropOffStore
+from location.excel_loader import load_locations_from_sipsn
+from domain.models import Location
+from domain.geo import filter_locations
 
 
 class MainWindow(QMainWindow):
-    """Main application window."""
+    """Main application window with 3-panel layout."""
     
     def __init__(self, classifier: PlastiTraceClassifier):
         super().__init__()
         self.classifier = classifier
         
         # Workers
-        self.camera_worker = None
+        self.capture_worker = None
         self.inference_worker = None
         self.inference_thread = None
+        
+        # Location store
+        self.location_store = DropOffStore()
+        # Load locations from data_sipsn.xlsx
+        self.all_locations = self._load_locations()
         
         # State
         self.running = False
         
         self.setWindowTitle("PlastiTrace Desktop")
-        self.setMinimumSize(1200, 800)
+        self.setMinimumSize(1600, 900)
         
         self.setup_ui()
-        self.setup_connections()
+    
+    def _load_locations(self) -> list[Location]:
+        """Load locations from cache file (preferred) or Excel file (fallback)."""
+        from location.excel_loader import load_locations_from_cache
+        
+        # Try to load from cache file first (fast, no geocoding needed)
+        cached_locations = load_locations_from_cache("data/locations_geocoded.json")
+        if cached_locations:
+            return cached_locations
+        
+        # Fallback: Load from Excel file (slower, requires geocoding)
+        print("Cache file not found, loading from Excel file...")
+        excel_locations = load_locations_from_sipsn("data_sipsn.xlsx", enable_geocoding=False, max_locations=200)
+        if excel_locations:
+            return excel_locations
+        
+        # Final fallback: Use seed data from store
+        print("Warning: Could not load from cache or Excel, falling back to seed data.")
+        dropoff_locs = self.location_store.get_all_locations()
+        locations = []
+        for loc in dropoff_locs:
+            locations.append(Location(
+                id=loc.id,
+                name=loc.name,
+                lat=loc.lat,
+                lon=loc.lng,
+                address=loc.address,
+                hours=loc.hours,
+                phone=loc.contact,
+                types=loc.accepted_types,
+                source=loc.source
+            ))
+        return locations
     
     def setup_ui(self):
-        """Setup UI components."""
+        """Setup UI components with 3-panel layout."""
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(10)
         
-        # Left: Video widget
-        self.video_widget = VideoWidget()
-        main_layout.addWidget(self.video_widget, 3)
+        # LEFT PANEL: Detection results + filters
+        left_panel = self.create_left_panel()
+        main_layout.addWidget(left_panel, 1)
         
-        # Right: Tab widget with Controls and Map
-        right_tabs = QTabWidget()
-        right_tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #334155;
-                background-color: #1e293b;
-                border-radius: 5px;
-            }
-            QTabBar::tab {
+        # CENTER PANEL: Video realtime
+        center_panel = QFrame()
+        center_panel.setStyleSheet("""
+            QFrame {
                 background-color: #0f172a;
-                color: #94a3b8;
-                padding: 8px 16px;
-                border-top-left-radius: 5px;
-                border-top-right-radius: 5px;
-            }
-            QTabBar::tab:selected {
-                background-color: #1e293b;
-                color: #f8fafc;
+                border-radius: 10px;
             }
         """)
+        center_layout = QVBoxLayout(center_panel)
+        center_layout.setContentsMargins(5, 5, 5, 5)
         
-        # Tab 1: Controls
-        controls_panel = self.create_controls_panel()
-        right_tabs.addTab(controls_panel, "Kontrol")
+        self.video_widget = VideoWidget()
+        center_layout.addWidget(self.video_widget)
         
-        # Tab 2: Map
-        map_panel = self.create_map_panel()
-        right_tabs.addTab(map_panel, "Peta Lokasi")
+        main_layout.addWidget(center_panel, 2)
         
-        main_layout.addWidget(right_tabs, 1)
+        # RIGHT PANEL: Map + location list
+        right_panel = QFrame()
+        right_panel.setStyleSheet("""
+            QFrame {
+                background-color: #1e293b;
+                border-radius: 10px;
+            }
+        """)
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(10, 10, 10, 10)
+        
+        self.map_view = MapView()
+        self.map_view.set_locations(self.all_locations)
+        self.map_view.locationSelected.connect(self.on_location_selected)
+        right_layout.addWidget(self.map_view)
+        
+        main_layout.addWidget(right_panel, 1)
     
-    def create_controls_panel(self):
-        """Create controls panel."""
+    def create_left_panel(self):
+        """Create left panel with detection results and controls."""
         panel = QFrame()
         panel.setFixedWidth(350)
         panel.setStyleSheet("""
@@ -95,9 +143,49 @@ class MainWindow(QMainWindow):
         layout.setSpacing(15)
         
         # Title
-        title = QLabel("PlastiTrace Controls")
-        title.setStyleSheet("color: #f8fafc; font-size: 18px; font-weight: bold;")
+        title = QLabel("PlastiTrace")
+        title.setStyleSheet("color: #10b981; font-size: 24px; font-weight: 900; letter-spacing: 2px;")
         layout.addWidget(title)
+        
+        tagline = QLabel("AI Real-time Plastic Analysis")
+        tagline.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        layout.addWidget(tagline)
+        
+        # Detection Result Card
+        result_card = QFrame()
+        result_card.setStyleSheet("background-color: rgba(15, 23, 42, 0.5); border-radius: 15px; padding: 15px;")
+        result_inner = QVBoxLayout(result_card)
+        
+        self.result_label = QLabel("Scanning...")
+        self.result_label.setStyleSheet("color: #f8fafc; font-size: 32px; font-weight: bold;")
+        self.result_label.setAlignment(Qt.AlignCenter)
+        result_inner.addWidget(self.result_label)
+        
+        self.conf_bar = QProgressBar()
+        self.conf_bar.setFixedHeight(8)
+        self.conf_bar.setTextVisible(False)
+        self.conf_bar.setStyleSheet("""
+            QProgressBar { background-color: #334155; border-radius: 4px; }
+            QProgressBar::chunk { background-color: #10b981; border-radius: 4px; }
+        """)
+        result_inner.addWidget(self.conf_bar)
+        
+        self.conf_text = QLabel("Confidence: 0%")
+        self.conf_text.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        self.conf_text.setAlignment(Qt.AlignRight)
+        result_inner.addWidget(self.conf_text)
+        
+        layout.addWidget(result_card)
+        
+        # Recommendations
+        rec_header = QLabel("♻️ RECYCLING GUIDE")
+        rec_header.setStyleSheet("color: #f8fafc; font-size: 14px; font-weight: bold; margin-top: 10px;")
+        layout.addWidget(rec_header)
+        
+        self.rec_label = QLabel("Please point the camera at a plastic object to begin classification.")
+        self.rec_label.setWordWrap(True)
+        self.rec_label.setStyleSheet("color: #94a3b8; line-height: 150%; font-size: 13px;")
+        layout.addWidget(self.rec_label)
         
         # Start/Stop button
         self.start_stop_btn = QPushButton("Start")
@@ -111,9 +199,6 @@ class MainWindow(QMainWindow):
             }
             QPushButton:hover {
                 background-color: #059669;
-            }
-            QPushButton:pressed {
-                background-color: #047857;
             }
         """)
         self.start_stop_btn.clicked.connect(self.toggle_start_stop)
@@ -137,7 +222,6 @@ class MainWindow(QMainWindow):
         """)
         camera_layout = QVBoxLayout(camera_group)
         
-        # Camera index
         camera_idx_layout = QHBoxLayout()
         camera_idx_layout.addWidget(QLabel("Camera Index:"))
         self.camera_idx_spin = QSpinBox()
@@ -154,7 +238,6 @@ class MainWindow(QMainWindow):
         inference_group.setStyleSheet(camera_group.styleSheet())
         inference_layout = QVBoxLayout(inference_group)
         
-        # Inference interval
         inf_interval_layout = QHBoxLayout()
         inf_interval_layout.addWidget(QLabel("Inference Interval:"))
         self.inference_interval_spin = QSpinBox()
@@ -164,16 +247,6 @@ class MainWindow(QMainWindow):
         inf_interval_layout.addWidget(self.inference_interval_spin)
         inference_layout.addLayout(inf_interval_layout)
         
-        # Redetect interval
-        redetect_layout = QHBoxLayout()
-        redetect_layout.addWidget(QLabel("Redetect Interval:"))
-        self.redetect_interval_spin = QSpinBox()
-        self.redetect_interval_spin.setMinimum(10)
-        self.redetect_interval_spin.setMaximum(120)
-        self.redetect_interval_spin.setValue(30)
-        redetect_layout.addWidget(self.redetect_interval_spin)
-        inference_layout.addLayout(redetect_layout)
-        
         layout.addWidget(inference_group)
         
         # Stability settings
@@ -181,7 +254,6 @@ class MainWindow(QMainWindow):
         stability_group.setStyleSheet(camera_group.styleSheet())
         stability_layout = QVBoxLayout(stability_group)
         
-        # Confidence threshold
         conf_thresh_layout = QVBoxLayout()
         conf_thresh_layout.addWidget(QLabel("Confidence Threshold:"))
         conf_thresh_slider_layout = QHBoxLayout()
@@ -198,20 +270,18 @@ class MainWindow(QMainWindow):
         )
         stability_layout.addLayout(conf_thresh_layout)
         
-        # Stabilize toggle
         self.stabilize_check = QCheckBox("Enable Stabilization")
         self.stabilize_check.setChecked(True)
         stability_layout.addWidget(self.stabilize_check)
         
-        # Alpha slider
         alpha_layout = QVBoxLayout()
         alpha_layout.addWidget(QLabel("Smoothing Alpha:"))
         alpha_slider_layout = QHBoxLayout()
         self.alpha_slider = QSlider(Qt.Horizontal)
         self.alpha_slider.setMinimum(10)
         self.alpha_slider.setMaximum(90)
-        self.alpha_slider.setValue(60)
-        self.alpha_label = QLabel("0.60")
+        self.alpha_slider.setValue(50)
+        self.alpha_label = QLabel("0.50")
         alpha_slider_layout.addWidget(self.alpha_slider)
         alpha_slider_layout.addWidget(self.alpha_label)
         alpha_layout.addLayout(alpha_slider_layout)
@@ -220,130 +290,11 @@ class MainWindow(QMainWindow):
         )
         stability_layout.addLayout(alpha_layout)
         
-        # Hysteresis margin
-        hyst_layout = QVBoxLayout()
-        hyst_layout.addWidget(QLabel("Hysteresis Margin:"))
-        hyst_slider_layout = QHBoxLayout()
-        self.hyst_slider = QSlider(Qt.Horizontal)
-        self.hyst_slider.setMinimum(0)
-        self.hyst_slider.setMaximum(30)
-        self.hyst_slider.setValue(10)
-        self.hyst_label = QLabel("0.10")
-        hyst_slider_layout.addWidget(self.hyst_slider)
-        hyst_slider_layout.addWidget(self.hyst_label)
-        hyst_layout.addLayout(hyst_slider_layout)
-        self.hyst_slider.valueChanged.connect(
-            lambda v: self.hyst_label.setText(f"{v/100:.2f}")
-        )
-        stability_layout.addLayout(hyst_layout)
-        
         layout.addWidget(stability_group)
         
-        # Display settings
-        display_group = QGroupBox("Display Settings")
-        display_group.setStyleSheet(camera_group.styleSheet())
-        display_layout = QVBoxLayout(display_group)
-        
-        # Alpha slider for overlay
-        overlay_alpha_layout = QVBoxLayout()
-        overlay_alpha_layout.addWidget(QLabel("Overlay Alpha:"))
-        overlay_alpha_slider_layout = QHBoxLayout()
-        self.overlay_alpha_slider = QSlider(Qt.Horizontal)
-        self.overlay_alpha_slider.setMinimum(10)
-        self.overlay_alpha_slider.setMaximum(90)
-        self.overlay_alpha_slider.setValue(60)
-        self.overlay_alpha_label = QLabel("0.60")
-        overlay_alpha_slider_layout.addWidget(self.overlay_alpha_slider)
-        overlay_alpha_slider_layout.addWidget(self.overlay_alpha_label)
-        overlay_alpha_layout.addLayout(overlay_alpha_slider_layout)
-        self.overlay_alpha_slider.valueChanged.connect(
-            lambda v: (self.overlay_alpha_label.setText(f"{v/100:.2f}"),
-                      self.video_widget.setOverlayAlpha(v/100))
-        )
-        display_layout.addLayout(overlay_alpha_layout)
-        
-        layout.addWidget(display_group)
-        
-        # Tracker settings
-        tracker_group = QGroupBox("Tracker Settings")
-        tracker_group.setStyleSheet(camera_group.styleSheet())
-        tracker_layout = QVBoxLayout(tracker_group)
-        
-        self.tracker_check = QCheckBox("Enable Tracker")
-        self.tracker_check.setChecked(True)
-        tracker_layout.addWidget(self.tracker_check)
-        
-        layout.addWidget(tracker_group)
-        
-        # Results display
-        results_group = QGroupBox("Last Result")
-        results_group.setStyleSheet(camera_group.styleSheet())
-        results_layout = QVBoxLayout(results_group)
-        
-        self.result_label = QLabel("N/A")
-        self.result_label.setStyleSheet("color: #f8fafc; font-size: 16px; font-weight: bold;")
-        self.result_label.setAlignment(Qt.AlignCenter)
-        results_layout.addWidget(self.result_label)
-        
-        self.conf_label = QLabel("Confidence: N/A")
-        self.conf_label.setStyleSheet("color: #94a3b8; font-size: 12px;")
-        self.conf_label.setAlignment(Qt.AlignCenter)
-        results_layout.addWidget(self.conf_label)
-        
-        layout.addWidget(results_group)
-        
         layout.addStretch()
         
         return panel
-    
-    def create_map_panel(self):
-        """Create map panel with location map and list."""
-        panel = QFrame()
-        panel.setStyleSheet("""
-            QFrame {
-                background-color: #1e293b;
-                border-radius: 10px;
-            }
-        """)
-        
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(15)
-        
-        # Title
-        title = QLabel("Peta Lokasi Pembuangan Sampah")
-        title.setStyleSheet("color: #f8fafc; font-size: 16px; font-weight: bold;")
-        layout.addWidget(title)
-        
-        # Category label
-        self.map_category_label = QLabel("Kategori: Pilih kategori plastik")
-        self.map_category_label.setStyleSheet("color: #94a3b8; font-size: 12px;")
-        layout.addWidget(self.map_category_label)
-        
-        # Map widget
-        self.map_widget = MapWidget()
-        self.map_widget.setMinimumHeight(250)
-        layout.addWidget(self.map_widget)
-        
-        # Location list
-        self.location_list = LocationListWidget()
-        self.location_list.setMinimumHeight(200)
-        layout.addWidget(self.location_list)
-        
-        # Info label
-        info_label = QLabel("Lokasi akan diperbarui otomatis berdasarkan kategori plastik yang terdeteksi")
-        info_label.setStyleSheet("color: #64748b; font-size: 10px;")
-        info_label.setWordWrap(True)
-        layout.addWidget(info_label)
-        
-        layout.addStretch()
-        
-        return panel
-    
-    def setup_connections(self):
-        """Setup signal connections."""
-        # Connect control changes to workers (will be connected when workers are created)
-        pass
     
     def toggle_start_stop(self):
         """Toggle camera start/stop."""
@@ -359,35 +310,15 @@ class MainWindow(QMainWindow):
         
         camera_index = self.camera_idx_spin.value()
         
-        # Create camera worker
-        self.camera_worker = CameraWorker(camera_index)
-        
-        # Connect frame updates (FPS is updated separately)
-        def on_frame_ready(frame):
-            self.video_widget.setFrame(frame, self.video_widget.latest_fps)
-        
-        def on_fps_ready(fps):
-            if self.video_widget.latest_frame is not None:
-                self.video_widget.setFrame(self.video_widget.latest_frame, fps)
-        
-        self.camera_worker.frameReady.connect(on_frame_ready)
-        self.camera_worker.fpsReady.connect(on_fps_ready)
-        self.camera_worker.bboxReady.connect(self.video_widget.setBBox)
-        
-        # Update camera worker settings
-        self.camera_worker.set_redetect_interval(self.redetect_interval_spin.value())
-        self.camera_worker.set_tracker_enabled(self.tracker_check.isChecked())
-        
-        # Connect redetect interval changes
-        self.redetect_interval_spin.valueChanged.connect(
-            self.camera_worker.set_redetect_interval
-        )
-        self.tracker_check.toggled.connect(
-            self.camera_worker.set_tracker_enabled
-        )
+        # Create capture worker
+        self.capture_worker = CaptureWorker(camera_index)
+        self.capture_worker.frameReady.connect(self.on_frame_received)
+        self.capture_worker.fpsReady.connect(self.on_fps_received)
+        self.capture_worker.start()
         
         # Create inference worker
         self.inference_worker = InferenceWorker(self.classifier)
+        self.inference_worker.bboxReady.connect(self.on_bbox_received)
         self.inference_worker.resultReady.connect(self.on_inference_result)
         
         # Update inference worker settings
@@ -395,9 +326,8 @@ class MainWindow(QMainWindow):
         self.inference_worker.set_confidence_threshold(self.conf_thresh_slider.value() / 100.0)
         self.inference_worker.set_stabilize_enabled(self.stabilize_check.isChecked())
         self.inference_worker.set_alpha(self.alpha_slider.value() / 100.0)
-        self.inference_worker.set_hysteresis_margin(self.hyst_slider.value() / 100.0)
         
-        # Connect inference worker settings
+        # Connect settings changes
         self.inference_interval_spin.valueChanged.connect(
             self.inference_worker.set_inference_interval
         )
@@ -410,41 +340,11 @@ class MainWindow(QMainWindow):
         self.alpha_slider.valueChanged.connect(
             lambda v: self.inference_worker.set_alpha(v / 100.0)
         )
-        self.hyst_slider.valueChanged.connect(
-            lambda v: self.inference_worker.set_hysteresis_margin(v / 100.0)
-        )
-        
-        # Store latest frame and bbox for inference
-        self._latest_frame_for_inference = None
-        self._latest_bbox_for_inference = None
-        
-        # Connect camera frames to inference worker
-        def on_frame_ready(frame):
-            self._latest_frame_for_inference = frame
-            if self._latest_frame_for_inference is not None:
-                self.inference_worker.inferenceRequested.emit(
-                    self._latest_frame_for_inference,
-                    self._latest_bbox_for_inference
-                )
-        
-        def on_bbox_ready(bbox, tracker_active):
-            self._latest_bbox_for_inference = bbox
-            if self._latest_frame_for_inference is not None:
-                self.inference_worker.inferenceRequested.emit(
-                    self._latest_frame_for_inference,
-                    self._latest_bbox_for_inference
-                )
-        
-        self.camera_worker.frameReady.connect(on_frame_ready)
-        self.camera_worker.bboxReady.connect(on_bbox_ready)
         
         # Move inference worker to thread
         self.inference_thread = QThread()
         self.inference_worker.moveToThread(self.inference_thread)
         self.inference_thread.start()
-        
-        # Start camera worker
-        self.camera_worker.start()
         
         self.running = True
         self.start_stop_btn.setText("Stop")
@@ -459,9 +359,6 @@ class MainWindow(QMainWindow):
             QPushButton:hover {
                 background-color: #dc2626;
             }
-            QPushButton:pressed {
-                background-color: #b91c1c;
-            }
         """)
     
     def stop(self):
@@ -469,10 +366,10 @@ class MainWindow(QMainWindow):
         if not self.running:
             return
         
-        # Stop camera worker
-        if self.camera_worker:
-            self.camera_worker.stop()
-            self.camera_worker = None
+        # Stop capture worker
+        if self.capture_worker:
+            self.capture_worker.stop()
+            self.capture_worker = None
         
         # Stop inference thread
         if self.inference_thread:
@@ -496,17 +393,32 @@ class MainWindow(QMainWindow):
             QPushButton:hover {
                 background-color: #059669;
             }
-            QPushButton:pressed {
-                background-color: #047857;
-            }
         """)
         
         # Clear video widget
         self.video_widget.setFrame(None, 0.0)
         self.video_widget.setBBox(None, False)
         self.video_widget.setResult(None)
-        self.result_label.setText("N/A")
-        self.conf_label.setText("Confidence: N/A")
+        self.result_label.setText("Scanning...")
+        self.conf_text.setText("Confidence: 0%")
+        self.conf_bar.setValue(0)
+    
+    def on_frame_received(self, frame):
+        """Handle frame from capture worker."""
+        fps = self.video_widget.latest_fps
+        self.video_widget.setFrame(frame, fps)
+        # Send to inference worker
+        if self.inference_worker:
+            self.inference_worker.on_frame_received(frame)
+    
+    def on_fps_received(self, fps):
+        """Handle FPS update."""
+        if self.video_widget.latest_frame is not None:
+            self.video_widget.setFrame(self.video_widget.latest_frame, fps)
+    
+    def on_bbox_received(self, bbox, tracker_active):
+        """Handle bbox update."""
+        self.video_widget.setBBox(bbox, tracker_active)
     
     def on_inference_result(self, result):
         """Handle inference result."""
@@ -514,40 +426,27 @@ class MainWindow(QMainWindow):
         
         label = result.get("label", "Unknown")
         confidence = result.get("confidence", 0.0)
-        raw_label = result.get("raw_label", "Unknown")
-        raw_conf = result.get("raw_conf", 0.0)
         
         # Update result display
-        if label == "Unknown":
-            self.result_label.setText(f"Unknown (raw: {raw_label})")
-            self.conf_label.setText(f"Confidence: {raw_conf:.2f} (below threshold)")
+        self.result_label.setText(label.upper() if label != "Unknown" else "UNKNOWN")
+        self.conf_bar.setValue(int(confidence * 100))
+        self.conf_text.setText(f"Confidence: {confidence*100:.1f}%")
+        
+        # Update recommendation
+        from ml.config import RECOMMENDATION
+        if label != "Unknown":
+            rec = RECOMMENDATION.get(label, "No recommendation available.")
+            self.rec_label.setText(rec)
         else:
-            self.result_label.setText(label)
-            self.conf_label.setText(f"Confidence: {confidence:.2f}")
+            self.rec_label.setText("Please point the camera at a plastic object.")
         
-        # Update map with locations for detected category
-        self.update_map_locations(label)
+        # Update map with filtered locations
+        self.map_view.set_selected_plastic_type(label)
     
-    def update_map_locations(self, category):
-        """Update map widget with locations for the given category."""
-        if category == "Unknown" or category not in SAMPLE_LOCATIONS:
-            # Clear map
-            self.map_widget.set_locations([])
-            self.location_list.set_locations([])
-            self.map_category_label.setText("Kategori: Tidak terdeteksi")
-            return
-        
-        # Get locations for this category
-        locations = SAMPLE_LOCATIONS.get(category, [])
-        
-        # Update map widget
-        self.map_widget.set_locations(locations)
-        
-        # Update location list
-        self.location_list.set_locations(locations)
-        
-        # Update category label
-        self.map_category_label.setText(f"Kategori: {category} ({len(locations)} lokasi ditemukan)")
+    def on_location_selected(self, location_id: str):
+        """Handle location selection."""
+        # TODO: Highlight location in map
+        pass
     
     def closeEvent(self, event):
         """Handle window close event."""

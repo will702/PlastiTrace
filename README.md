@@ -1,70 +1,139 @@
-# PlastiTrace Desktop
+# PlastiTrace
 
-Aplikasi desktop Python untuk deteksi jenis plastik secara realtime dari webcam menggunakan PyTorch dan OpenCV dengan bbox tracking stabil.
+Real-time plastic classification and recycling guidance powered by PyTorch ResNet18. PlastiTrace ships as a PyQt5 desktop app with live camera detection, a Next.js web classifier, and a Flask API backend.
 
-## Installation
+![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
+![PyTorch](https://img.shields.io/badge/PyTorch-ResNet18-orange)
+![OpenCV](https://img.shields.io/badge/OpenCV-tracking-green)
+![PyQt5](https://img.shields.io/badge/Desktop-PyQt5-lightgrey)
+![Next.js](https://img.shields.io/badge/Web-Next.js-black)
+![Flask](https://img.shields.io/badge/API-Flask-red)
 
-1. Create and activate a virtual environment:
+**Classes:** HDPE, PET, PP, PS
+
+---
+
+## System overview
+
+```mermaid
+flowchart TB
+  subgraph surfaces [User Surfaces]
+    Desktop["Desktop PyQt5 app.py"]
+    Web["Web Next.js web/"]
+    API["Flask API api.py"]
+  end
+
+  subgraph core [Shared Core]
+    ML["ml/classifier ResNet18"]
+    Vision["vision/ bbox pipeline"]
+    Realtime["realtime/ stability"]
+  end
+
+  subgraph desktopOnly [Desktop Only]
+    Workers["workers/ capture + inference"]
+    Map["ui/map_view SIPSN locations"]
+  end
+
+  Desktop --> Workers --> Vision --> ML
+  Desktop --> Map
+  Web --> API --> ML
+```
+
+---
+
+## Surface comparison
+
+| Feature | Desktop (`app.py`) | Web (`web/`) | API (`api.py`) |
+|---------|-------------------|--------------|----------------|
+| Realtime camera detection | Yes | No (capture/upload) | N/A |
+| Drop-off location map | Yes | No | No |
+| Mobile-friendly | No | Yes | N/A |
+| Modern UI | Yes (PyQt5) | Yes (Next.js) | N/A |
+| Best for | Local realtime use | Browser / phone access | Backend integration |
+| Deploy target | Local / PyInstaller | Vercel | Render / Railway / HF Spaces |
+
+---
+
+## Architecture
+
+### Desktop pipeline
+
+Realtime detection runs in worker threads so the GUI stays responsive.
+
+```mermaid
+flowchart LR
+  Webcam["Webcam"] --> Capture["CaptureWorker"]
+  Capture --> Inference["InferenceWorker"]
+  Inference --> Bbox["bbox detect + CSRT track"]
+  Bbox --> ROI["ROI crop"]
+  ROI --> Model["ResNet18 classify"]
+  Model --> Overlay["overlay_widget"]
+  Model --> Panel["result panel"]
+  Model --> Map["map_view filter"]
+```
+
+### Web pipeline
+
+The web app sends a single image per request (no realtime stream).
+
+```mermaid
+flowchart LR
+  User["Camera or upload"] --> NextJS["Next.js client"]
+  NextJS -->|"POST /api/classify"| Flask["Flask api.py"]
+  Flask --> Model["ResNet18 classify"]
+  Model --> JSON["label + confidence"]
+  JSON --> UI["Result + recycling guide"]
+```
+
+### Deployment topology
+
+```mermaid
+flowchart LR
+  GitHub["GitHub repo"]
+  Vercel["Vercel web/"]
+  APIHost["Render or Railway api.py"]
+  GitHub --> Vercel
+  GitHub --> APIHost
+  Vercel -->|"NEXT_PUBLIC_API_URL"| APIHost
+```
+
+The frontend and API deploy separately. GitHub hosts source code; Vercel serves the Next.js app; a Python host runs the Flask API with the PyTorch model.
+
+---
+
+## Quick start
+
+### Prerequisites
+
+- Python 3.11+ (3.12 recommended; 3.14 may work but is less tested)
+- Node.js 20+ (for web frontend)
+- Webcam (desktop app)
+- C++ build tools (for NumPy/OpenCV on some systems)
+
+### Desktop app
+
 ```bash
-# Create virtual environment
 python3 -m venv venv
-#ensure u use python 3.14 to avoid error 
-#and make sure u have the c++ or c compiler installed for numpy 
-
-# Activate virtual environment
-# On macOS/Linux:
-source venv/bin/activate
-# On Windows:
-# venv\Scripts\activate
-```
-
-2. Install dependencies:
-```bash
+source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-## Usage
-
-### Desktop Application (CLI - Original)
-
-Run the desktop application with camera loop (command line interface):
-```bash
 python app.py
 ```
 
-**Note:** Make sure the virtual environment is activated before running the application.
+Press **ESC** or click **Stop** to end a session.
 
-Tekan **ESC** untuk keluar dari aplikasi.
+### Web app (local)
 
-### Desktop Application (GUI - NEW)
+**Terminal 1 - API:**
 
-Run the desktop application with PyQt5 GUI (realtime detection with modern interface):
 ```bash
-python app_gui.py
-```
-
-**Features:**
-- 🎨 Modern GUI dengan PyQt5
-- 📹 Realtime video preview
-- 🤖 Live plastic classification
-- ♻️ Recycling recommendations in Indonesian
-- 📊 FPS counter
-- 🎯 Bounding box visualization
-
-Tekan **ESC** atau tombol "Keluar" untuk menutup aplikasi.
-
-### Web Application
-
-Run the Next.js web UI with Flask API backend:
-
-1. **Start the Flask API backend:**
-```bash
+source venv/bin/activate
 python api.py
 ```
 
-The API runs on `http://localhost:5001` (port 5001 avoids AirPlay conflict on macOS).
+API runs at `http://localhost:5001` (port 5001 avoids macOS AirPlay conflict on 5000).
 
-2. **Start the web frontend:**
+**Terminal 2 - Frontend:**
+
 ```bash
 cd web
 cp .env.example .env.local
@@ -74,98 +143,69 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-**Web Features:**
-- Upload images or use camera for classification
-- AI classification with confidence scores
-- Recycling recommendations in Bahasa Indonesia
-- Responsive UI with light/dark mode
-- Mobile-friendly (camera requires HTTPS in production)
-
-**Note:** Web app uses capture/upload mode, not realtime detection. For realtime detection, use the Desktop app (`python app.py`).
-
-### Deploy Web to Vercel
+### Deploy web to Vercel
 
 1. Push the repo to GitHub.
 2. Import the project in [Vercel](https://vercel.com).
 3. Set **Root Directory** to `web`.
-4. Add environment variable:
-   - `NEXT_PUBLIC_API_URL` = your deployed Flask API URL (e.g. `https://plastitrace-api.onrender.com`)
+4. Add environment variable: `NEXT_PUBLIC_API_URL=https://your-api-host.com`
 5. Deploy.
 
-The Flask API must be hosted separately (Render, Railway, or Hugging Face Spaces). GitHub Pages cannot run Python/PyTorch backends. Configure CORS on `api.py` to allow your Vercel domain.
+Configure CORS in `api.py` to allow your Vercel domain. The API must run on a Python-friendly host (Render, Railway, or Hugging Face Spaces).
 
-## Features
+---
 
-### Desktop App (CLI) Features
+## Project structure
 
-- **Realtime bbox detection**: Deteksi objek plastik menggunakan OpenCV contours (tanpa YOLO)
-- **Stable tracking**: CSRT tracker untuk bbox yang stabil dan smooth
-- **ROI classification**: Crop ROI dari bbox → klasifikasi dengan ResNet18
-- **Inference throttling**: Inference hanya setiap N frames (default: setiap 3 frames)
-- **Smooth overlay**: Bbox, label, confidence, dan rekomendasi ditampilkan realtime
-- **FPS counter**: Monitor performa aplikasi
-- **CPU-friendly**: Optimized untuk CPU, CUDA opsional
-- **Stabil**: Didesain untuk running >10 menit tanpa masalah
-
-### Desktop App (GUI) Features
-
-- **Modern PyQt5 Interface**: GUI yang clean dan professional
-- **Realtime Video Preview**: Live camera feed dengan bbox overlay
-- **Live Classification**: Deteksi dan klasifikasi plastik secara realtime
-- **Information Panel**: Tampilan hasil, confidence score, dan rekomendasi
-- **FPS Monitor**: Real-time FPS counter
-- **Keyboard Shortcuts**: ESC untuk keluar
-- **Smooth Animations**: Transisi yang halus dan responsive
-
-### Web App Features
-
-- **Image Upload**: Upload gambar plastik untuk klasifikasi
-- **Webcam Capture**: Ambil foto langsung dari webcam
-- **AI Classification**: Identifikasi jenis plastik dengan confidence score
-- **Recycling Guide**: Rekomendasi daur ulang untuk setiap jenis plastik
-- **Responsive Design**: Works on desktop and mobile devices
-- **Real-time Processing**: Fast classification with visual feedback
-
-## Architecture
-
-### Desktop App (CLI & GUI)
 ```
-Webcam → Bbox Detection (contours) → CSRT Tracker → ROI Crop →
-ResNet18 Classifier (throttled) → Overlay/Display (bbox + label + recommendation)
-```
-
-### Web App
-```
-Browser (Upload/Camera) → Flask API → ResNet18 Classifier → JSON Response →
-Web UI Display (Label + Confidence + Recommendations)
+PlastiTrace/
+├── app.py                  # Desktop entry (PyQt5)
+├── api.py                  # Flask REST API
+├── requirements.txt
+├── models/
+│   └── plastitrace.pth     # ResNet18 weights
+├── ml/
+│   ├── classifier.py       # PyTorch ResNet18 wrapper
+│   ├── config.py           # Classes + recycling copy (ID)
+│   └── preprocess.py
+├── vision/
+│   ├── bbox_detector.py    # Contour-based detection
+│   ├── bbox_tracker.py     # CSRT/KCF tracker
+│   └── smoothing.py        # EMA smoothing
+├── realtime/
+│   └── stability.py        # Prob smoother + hysteresis labels
+├── workers/
+│   ├── capture_worker.py   # Camera thread
+│   └── inference_worker.py # Inference thread
+├── ui/
+│   ├── main_window.py      # 3-panel desktop shell
+│   ├── video_widget.py     # Camera preview
+│   ├── overlay_widget.py   # Bbox + label overlay
+│   └── map_view.py         # Leaflet drop-off map
+├── location/               # SIPSN drop-off data + filtering
+├── domain/                 # Location models + geo utils
+├── trust/                  # Frame quality + decision engine
+├── feedback/               # Scan dataset + evaluation
+├── data/                   # Geocoded locations + seed JSON
+├── assets/map/             # Leaflet HTML template
+└── web/                    # Next.js frontend (Vercel)
+    ├── app/
+    ├── components/
+    └── lib/
 ```
 
-### Key Components
+---
 
-#### Desktop App
-- **app.py**: Original CLI-based realtime detection (OpenCV display)
-- **vision/bbox_detector.py**: Deteksi bbox menggunakan Canny edges + contours
-- **vision/bbox_tracker.py**: CSRT/KCF tracker untuk stabilisasi bbox
-- **vision/smoothing.py**: EMA smoothing untuk bbox dan confidence
-- **ml/classifier.py**: ResNet18 classifier dengan FP32 enforcement
-- **ui/camera_loop.py**: Main camera loop logic (used by app.py)
+## API reference
 
-#### Web App
-- **api.py**: Flask REST API endpoint for image classification
-- **web/**: Next.js frontend (Vercel-ready)
+### `POST /api/classify`
 
-## API Endpoints
+Classify plastic from an uploaded image.
 
-### POST /api/classify
-
-Classify a plastic item from an uploaded image.
-
-**Request:**
-- Method: `POST`
-- Content-Type: `multipart/form-data`
-- Body: `image` (file)
+**Request:** `multipart/form-data` with field `image` (file)
 
 **Response:**
+
 ```json
 {
   "label": "PET",
@@ -173,193 +213,84 @@ Classify a plastic item from an uploaded image.
 }
 ```
 
-### GET /api/health
-
-Check if the API is running.
+### `GET /api/health`
 
 **Response:**
+
 ```json
 {
   "status": "ok"
 }
 ```
 
+---
+
 ## Model
 
-The application uses a ResNet18 model trained for 4-class plastic classification. The model file should be located at `models/plastitrace.pth`.
+- **Architecture:** ResNet18 fine-tuned for 4-class plastic classification
+- **Weights:** `models/plastitrace.pth`
+- **Input:** 224x224 RGB, ImageNet normalization
+- **Classes:** HDPE, PET, PP, PS
 
-**Classes:** HDPE, PET, PP, PS
+Recycling recommendations (Bahasa Indonesia) are defined in `ml/config.py` and mirrored in `web/lib/recommendations.ts`.
 
-## Project Structure
-```
-plastitrace_desktop/
-├── app.py                     # Entry point (Desktop CLI)
-├── app_gui.py                 # Entry point (Desktop GUI - PyQt5)
-├── api.py                     # Flask API backend (Web App)
-├── requirements.txt
-├── models/
-│   └── plastitrace.pth
-├── ml/
-│   ├── config.py             # Constants & recommendations
-│   ├── classifier.py         # PyTorch ResNet18 classifier
-│   └── preprocess.py         # Image preprocessing
-├── vision/
-│   ├── bbox_detector.py      # Contour-based bbox detection
-│   ├── bbox_tracker.py       # CSRT/KCF tracker wrapper
-│   └── smoothing.py          # EMA smoothing
-├── ui/
-│   └── camera_loop.py        # Camera loop logic (for app.py)
-├── utils/
-│   └── softmax.py            # Softmax utility
-└── web/
-    ├── app/                  # Next.js App Router
-    ├── components/           # UI components
-    └── lib/                  # API client + recommendations
-```
+---
 
 ## Configuration
 
-### Desktop App Settings (CLI & GUI)
+### Desktop defaults (`ui/main_window.py`)
 
-Default settings in `app.py` and `app_gui.py`:
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Camera index | 0 | Webcam device |
+| Inference interval | 3 | Classify every N frames |
+| Confidence threshold | 0.65 | Minimum confidence to show label |
+| Stabilization | On | EMA + hysteresis anti-flicker |
 
-- `min_area=2000`: Minimum bbox area untuk detection
-- `inference_interval=3`: Run inference setiap 3 frames
-- `redetect_interval=30`: Re-detect bbox setiap 30 frames (untuk koreksi drift)
+### API defaults (`api.py`)
 
-### Web App Settings
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Host | `0.0.0.0` | Bind address |
+| Port | `5001` | HTTP port |
+| CORS | All origins | Restrict in production |
 
-Default settings in `api.py`:
+### Web (`web/.env.local`)
 
-- Host: `0.0.0.0`
-- Port: `5001` (changed from 5000 to avoid AirPlay conflict on macOS)
-- Debug: `True` (set to `False` for production)
-- CORS: Enabled for all origins (restrict in production)
+| Variable | Example | Description |
+|----------|---------|-------------|
+| `NEXT_PUBLIC_API_URL` | `http://localhost:5001` | Flask API base URL (no trailing slash) |
 
-**Web UI (`index.html`):**
-- API URL: `http://localhost:5001/api/classify`
-
-## Recommendations
-
-Aplikasi menampilkan rekomendasi daur ulang dalam Bahasa Indonesia:
-
-- **HDPE**: Umumnya bisa didaur ulang. Bilas dan masukkan ke sampah daur ulang plastik keras.
-- **PET**: Botol minum plastik. Bilas, lepas label bila memungkinkan, buang ke sampah daur ulang.
-- **PP**: Wadah makanan/kantong tertentu. Bila bersih, daur ulang; jika tidak ada fasilitas, buang sebagai residu.
-- **PS**: Styrofoam/foam. Sulit didaur ulang; hindari pembakaran, buang ke sampah residu.
+---
 
 ## Troubleshooting
 
-### Desktop App (CLI & GUI)
+### Desktop
 
-**Error: "No OpenCV tracker available"**
-- Install opencv-contrib-python: `pip install opencv-contrib-python`
+| Problem | Fix |
+|---------|-----|
+| `No OpenCV tracker available` | `pip install opencv-contrib-python` |
+| `No module named 'PyQt5'` | `pip install PyQt5 PyQtWebEngine` |
+| Low FPS | Increase inference interval in the UI settings panel |
+| Camera not found | Change camera index; check macOS camera permissions |
 
-**Error: "No module named 'PyQt5'"** (GUI only)
-- Install PyQt5: `pip install PyQt5`
+### Web
 
-**Low FPS or slow inference**
-- Reduce `inference_interval` in `app.py` or `app_gui.py`
-- Use smaller input images
-- Enable CUDA if available
+| Problem | Fix |
+|---------|-----|
+| Port 5001 in use | Change port in `api.py` and update `NEXT_PUBLIC_API_URL` |
+| Camera blocked | Use HTTPS in production; grant browser permission |
+| Classification failed | Ensure API is running; check `models/plastitrace.pth` exists |
+| CORS errors | Install `flask-cors`; restrict origins in production |
 
-**Camera not detected**
-- Check if camera is already in use by another application
-- Try changing `camera_index` from 0 to 1 in the code
-- Check camera permissions in System Preferences (macOS)
+---
 
-### Web App
+## Contributing
 
-**Error: "Port 5001 is in use"**
-- Change port in `api.py`: `app.run(host='0.0.0.0', port=5002, debug=True)`
-- Update API URL in `web/index.html` to match new port
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, verification steps, and submission guidelines.
 
-**Error: "Cannot access camera"**
-- Grant browser permission to access camera
-- Use HTTPS (required for webcam on some browsers)
-- Check if camera is already in use
-
-**Error: "Failed to classify image"**
-- Make sure Flask API is running on `http://localhost:5001`
-- Check API logs for errors
-- Verify model file exists at `models/plastitrace.pth`
-
-**CORS errors**
-- Ensure flask-cors is installed: `pip install flask-cors`
-- Check browser console for specific CORS errors
-
-**macOS AirPlay Receiver conflict (Port 5000)**
-- Disable AirPlay Receiver in System Settings → General → AirDrop & Handoff
-- OR use port 5001 (already configured in api.py)
-
-## Application Comparison
-
-| Feature | Desktop CLI | Desktop GUI | Web App |
-|---------|------------|-------------|---------|
-| Realtime Detection | ✅ Yes | ✅ Yes | ❌ No (capture only) |
-| Modern UI | ❌ No | ✅ Yes | ✅ Yes |
-| Installation | Easy | Easy | Medium |
-| Performance | Excellent | Excellent | Good |
-| Mobile Support | ❌ No | ❌ No | ✅ Yes |
-| Best For | Development/Testing | End Users (Desktop) | Web Access/Mobile |
-
-**Recommendation:**
-- **Development/Debugging**: Use `app.py` (CLI)
-- **Desktop Users**: Use `app_gui.py` (PyQt5 GUI) - **RECOMMENDED**
-- **Web/Mobile Access**: Use Web App (`api.py` + `web/index.html`)
-
-## Production Deployment
-
-### Desktop App
-- Package with PyInstaller for distribution:
-```bash
-  pip install pyinstaller
-  pyinstaller --onefile --windowed app_gui.py
-```
-
-### Web App
-For production deployment:
-
-1. **Set Flask to production mode:**
-   - Change `debug=True` to `debug=False` in `api.py`
-   - Use a production WSGI server like Gunicorn:
-```bash
-     pip install gunicorn
-     gunicorn -w 4 -b 0.0.0.0:5001 api:app
-```
-
-2. **Configure CORS properly:**
-   - Restrict allowed origins in `api.py`
-   - Don't use `CORS(app)` with no parameters in production
-
-3. **Serve static files:**
-   - Use Nginx or Apache to serve `web/index.html`
-   - Configure reverse proxy to Flask API
-
-4. **Security considerations:**
-   - Add rate limiting
-   - Implement file size limits for uploads
-   - Validate file types
-   - Use HTTPS
+---
 
 ## License
 
 [Your License Here]
-
-## Contributors
-
-[Your Team/Contributors Here]
-
-## Changelog
-
-### v2.0 (Latest)
-- ✨ Added PyQt5 GUI desktop application (`app_gui.py`)
-- 🌐 Added web interface with React UI
-- 🔧 Fixed port conflict with macOS AirPlay (port 5001)
-- 🇮🇩 Full Bahasa Indonesia support in all interfaces
-- 📝 Updated documentation
-
-### v1.0
-- 🎯 Initial release with CLI desktop app
-- 🤖 ResNet18 classification
-- 📹 CSRT bbox tracking
