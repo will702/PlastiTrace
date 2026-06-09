@@ -1,6 +1,4 @@
-# ML
-torch
-torchvision
+# ML (torch/torchvision installed separately in Dockerfile via CPU index)
 opencv-python
 numpy
 Pillow
